@@ -1,7 +1,7 @@
 {
   "name": "opencode-cliproxy-provider",
   "version": "1.0.0",
-  "description": "OpenCode plugin that auto-syncs Cliproxy models and thinking levels.",
+  "description": "OpenCode plugin that auto-syncs Cliproxy models and reasoning levels.",
   "type": "module",
   "main": "./dist/index.js",
   "exports": {
@@ -23,10 +23,25 @@
     "plugin",
     "cliproxy",
     "models",
+    "reasoning",
     "auto-sync"
   ],
-  "author": "ilseoblee",
+  "author": "ilseoblee <islee23520@gmail.com>",
   "license": "MIT",
+  "homepage": "https://github.com/islee23520/opencode-cliproxy-provider#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/islee23520/opencode-cliproxy-provider.git"
+  },
+  "bugs": {
+    "url": "https://github.com/islee23520/opencode-cliproxy-provider/issues"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "peerDependencies": {
     "@opencode-ai/plugin": "^1.4.0"
   },
