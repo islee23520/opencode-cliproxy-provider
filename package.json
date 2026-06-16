@@ -1,6 +1,6 @@
 {
   "name": "opencode-cliproxy-provider",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "OpenCode plugin that auto-syncs Cliproxy models and reasoning levels.",
   "type": "module",
   "main": "./dist/index.js",

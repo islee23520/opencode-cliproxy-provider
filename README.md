@@ -48,35 +48,6 @@ import { writeStoredAuth } from "opencode-cliproxy-provider";
 writeStoredAuth("sk-your-key");
 ```
 
-## Variant → Reasoning Effort
-
-The provider reads `variant` from agent configs and translates it to `reasoningEffort` / `reasoning_effort` at the API level. Agent names are normalized generically — display names like `"Hephaestus - Deep Agent"` or `"Prometheus (Plan Builder)"` are resolved to their config keys automatically, no hardcoded aliases needed.
-
-```jsonc
-// oh-my-openagent.json or opencode.json
-{
-  "agents": {
-    "my-agent": {
-      "model": "cliproxy/gpt-5.5",
-      "variant": "high"
-    }
-  }
-}
-```
-
-At runtime, reasoning effort priority is:
-
-1. **Agent-level variant** (from config)
-2. **Message/model variant** (passed at request time)
-3. **Model default** (from Cliproxy catalog)
-
-## How it works
-
-```
-config hook          → fetch models, register variants, store agent→variant map
-chat.params hook     → resolve agent name, look up variant, set reasoningEffort
-```
-
 ## License
 
 MIT
