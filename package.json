@@ -1,15 +1,37 @@
 {
-  "name": "opencode-cliproxy-provider",
+  "name": "cliproxy-provider",
   "version": "1.1.2",
-  "description": "OpenCode plugin that auto-syncs Cliproxy models and reasoning levels.",
+  "description": "Unified Cliproxy provider/router for OpenCode and OpenAI-compatible clients.",
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
+    "cliproxy-provider": "dist/cli.js",
     "opencode-cliproxy-provider": "dist/cli.js"
   },
   "exports": {
     ".": {
       "import": "./dist/index.js"
+    },
+    "./core": {
+      "import": "./dist/core/index.js"
+    },
+    "./adapters/opencode": {
+      "import": "./dist/adapters/opencode/index.js"
+    },
+    "./adapters/codex": {
+      "import": "./dist/adapters/codex/index.js"
+    },
+    "./adapters/grokbuild": {
+      "import": "./dist/adapters/grokbuild/index.js"
+    },
+    "./adapters/pi-agent": {
+      "import": "./dist/adapters/pi-agent/index.js"
+    },
+    "./adapters/senpi": {
+      "import": "./dist/adapters/senpi/index.js"
+    },
+    "./router": {
+      "import": "./dist/core/router.js"
     }
   },
   "files": [
@@ -17,27 +39,32 @@
     "README.md"
   ],
   "scripts": {
+    "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "build": "bun build ./src/index.ts ./src/cli.ts --outdir ./dist --target bun --format esm --external @opencode-ai/plugin",
+    "build": "bun build ./src/index.ts ./src/cli.ts ./src/core/index.ts ./src/core/router.ts ./src/adapters/opencode/index.ts ./src/adapters/codex/index.ts ./src/adapters/grokbuild/index.ts ./src/adapters/pi-agent/index.ts ./src/adapters/senpi/index.ts --outdir ./dist --root ./src --target bun --format esm --external @opencode-ai/plugin",
     "prepublishOnly": "bun run typecheck && bun run build"
   },
   "keywords": [
     "opencode",
+    "codex",
+    "grok",
     "plugin",
+    "provider",
     "cliproxy",
+    "router",
     "models",
     "reasoning",
     "auto-sync"
   ],
   "author": "ilseoblee <islee23520@gmail.com>",
   "license": "MIT",
-  "homepage": "https://github.com/islee23520/opencode-cliproxy-provider#readme",
+  "homepage": "https://github.com/islee23520/cliproxy-provider#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/islee23520/opencode-cliproxy-provider.git"
+    "url": "git+https://github.com/islee23520/cliproxy-provider.git"
   },
   "bugs": {
-    "url": "https://github.com/islee23520/opencode-cliproxy-provider/issues"
+    "url": "https://github.com/islee23520/cliproxy-provider/issues"
   },
   "engines": {
     "bun": ">=1.0.0"

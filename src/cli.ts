@@ -1,241 +1,233 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import * as readline from "node:readline/promises";
-import { stdin as input, stdout as output } from "node:process";
+import { fetchModels, modelsCatalogPayload, readStoredAuth, serveCliproxyRouter } from "./core";
+import { normalizeTarget, runDoctor, runPrintConfig, runSetup, runSync, supportedTargets, type Target } from "./cli/router";
 
-// ---------------------------------------------------------------------------
-// Path helpers — mirror src/index.ts
-// ---------------------------------------------------------------------------
+type Command = "setup" | "serve" | "models" | "sync" | "doctor" | "print-config" | "help";
 
-function configHome(): string {
-  return process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
-}
+type CliArgs = {
+  command: Command;
+  target: Target | null;
+  rawTarget?: string;
+  baseUrl?: string;
+  upstreamBaseUrl?: string;
+  apiKey?: string;
+  host?: string;
+  port?: number;
+  catalog: boolean;
+  help: boolean;
+  json: boolean;
+  write: boolean;
+  config?: string;
+};
 
-function opencodeConfigDir(): string {
-  return join(configHome(), "opencode");
-}
+const defaultBaseUrl = "http://[IP]:8317/v1";
 
-function authFilePath(): string {
-  return (
-    process.env.CLIPROXY_AUTH_FILE ||
-    join(opencodeConfigDir(), "cliproxy", "auth.json")
-  );
-}
-
-function opencodeJsonPath(): string {
-  const dir = opencodeConfigDir();
-  for (const name of ["opencode.json", "opencode.jsonc"]) {
-    const p = join(dir, name);
-    if (existsSync(p)) return p;
+function parseArgs(argv: readonly string[]): CliArgs {
+  const first = argv[0];
+  if (first === "grokbuild") {
+    const subcommand = argv[1] === "setup" ? "setup" : "sync";
+    const flags = argv.slice(argv[1] === "setup" || argv[1] === "sync" ? 2 : 1);
+    return {
+      command: subcommand,
+      target: "grokbuild",
+      rawTarget: "grokbuild",
+      catalog: flags.includes("--catalog"),
+      help: flags.includes("--help") || flags.includes("-h"),
+      json: flags.includes("--json"),
+      write: subcommand === "sync" ? flags.includes("--write") : flags.includes("--write"),
+      ...parseFlagValues(flags),
+    };
   }
-  return join(dir, "opencode.json");
-}
-
-// ---------------------------------------------------------------------------
-// Auth — 0o600 file outside opencode.json
-// ---------------------------------------------------------------------------
-
-function writeStoredAuth(apiKey: string): void {
-  const path = authFilePath();
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeFileSync(path, JSON.stringify({ apiKey }, null, 2), { mode: 0o600 });
-}
-
-// ---------------------------------------------------------------------------
-// opencode.json read/write (JSONC-safe)
-// ---------------------------------------------------------------------------
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
-function parseJSONC(text: string): unknown {
-  return JSON.parse(
-    text
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/(^|[^:])\/\/.*$/gm, "$1"),
-  );
-}
-
-function readOpencodeConfig(path: string): Record<string, unknown> {
-  if (!existsSync(path)) return {};
-  try {
-    const data = parseJSONC(readFileSync(path, "utf8"));
-    return isRecord(data) ? data : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeOpencodeConfig(path: string, config: Record<string, unknown>): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
-}
-
-// ---------------------------------------------------------------------------
-// Setup
-// ---------------------------------------------------------------------------
-
-interface SetupOptions {
-  baseURL: string;
-  apiKey: string;
-  providerNpm?: string;
-}
-
-function applySetup(config: Record<string, unknown>, opts: SetupOptions): Record<string, unknown> {
-  const result = { ...config };
-
-  // plugin array
-  const existingPlugin = Array.isArray(result.plugin) ? result.plugin as unknown[] : [];
-  if (!existingPlugin.includes("opencode-cliproxy-provider")) {
-    result.plugin = [...existingPlugin, "opencode-cliproxy-provider"];
-  }
-
-  // provider.cliproxy
-  if (!isRecord(result.provider)) {
-    result.provider = {};
-  }
-  const provider = isRecord(result.provider) ? result.provider : {};
-  result.provider = {
-    ...provider,
-    cliproxy: {
-      options: {
-        ...(isRecord(provider.cliproxy) && isRecord(provider.cliproxy.options)
-          ? provider.cliproxy.options
-          : {}),
-        baseURL: opts.baseURL,
-      },
-      npm: opts.providerNpm ?? "@ai-sdk/openai-compatible",
-      name: "Cliproxy",
-    },
+  const command = parseCommand(first);
+  const targetIndex = command === "setup" && first !== "setup" ? 0 : 1;
+  const rawTarget = argv[targetIndex]?.startsWith("-") ? undefined : argv[targetIndex];
+  const flags = argv.slice(rawTarget ? targetIndex + 1 : targetIndex);
+  return {
+    command,
+    target: normalizeTarget(rawTarget ?? "opencode"),
+    ...(rawTarget ? { rawTarget } : {}),
+    catalog: flags.includes("--catalog"),
+    help: flags.includes("--help") || flags.includes("-h"),
+    json: flags.includes("--json"),
+    write: flags.includes("--write"),
+    ...parseFlagValues(flags),
   };
-
-  return result;
 }
 
-// ---------------------------------------------------------------------------
-// Interactive prompts
-// ---------------------------------------------------------------------------
-
-async function prompt(rl: readline.Interface, question: string, defaultValue?: string): Promise<string> {
-  const suffix = defaultValue ? ` (${defaultValue})` : "";
-  const answer = (await rl.question(`${question}${suffix}: `)).trim();
-  return answer || defaultValue || "";
+function parseCommand(value: string | undefined): Command {
+  switch (value) {
+    case "setup":
+    case "serve":
+    case "models":
+    case "sync":
+    case "doctor":
+    case "print-config":
+    case "help":
+      return value;
+    default:
+      return "setup";
+  }
 }
 
-async function promptHidden(rl: readline.Interface, question: string): Promise<string> {
-  // readline.question doesn't hide input, but this is the simplest cross-runtime approach.
-  // The key lives in a 0o600 file, not displayed.
-  const answer = (await rl.question(`${question}: `)).trim();
-  return answer;
-}
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
-
-function parseArgs(argv: string[]): { baseURL?: string; apiKey?: string; npm?: string; help?: boolean } {
-  const args: { baseURL?: string; apiKey?: string; npm?: string; help?: boolean } = {};
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--baseURL" || arg === "--base-url" || arg === "-u") {
-      args.baseURL = argv[++i];
-    } else if (arg === "--apiKey" || arg === "--api-key" || arg === "-k") {
-      args.apiKey = argv[++i];
-    } else if (arg === "--npm") {
-      args.npm = argv[++i];
-    } else if (arg === "--help" || arg === "-h") {
-      args.help = true;
+function parseFlagValues(flags: readonly string[]): Partial<CliArgs> {
+  const values: Partial<CliArgs> = {};
+  for (let index = 0; index < flags.length; index += 1) {
+    const flag = flags[index];
+    const next = flags[index + 1];
+    if (!next) {
+      continue;
+    }
+    switch (flag) {
+      case "--baseURL":
+      case "--base-url":
+      case "-u":
+        values.baseUrl = next;
+        index += 1;
+        break;
+      case "--upstream-baseURL":
+      case "--upstream-base-url":
+        values.upstreamBaseUrl = next;
+        index += 1;
+        break;
+      case "--apiKey":
+      case "--api-key":
+      case "-k":
+        values.apiKey = next;
+        index += 1;
+        break;
+      case "--host":
+        values.host = next;
+        index += 1;
+        break;
+      case "--port":
+      case "-p": {
+        const port = Number.parseInt(next, 10);
+        if (Number.isFinite(port)) {
+          values.port = port;
+        }
+        index += 1;
+        break;
+      }
+      case "--config":
+        values.config = next;
+        index += 1;
+        break;
     }
   }
-  return args;
+  return values;
 }
 
 function printHelp(): void {
   console.log(`
-opencode-cliproxy-provider setup
+cliproxy-provider
 
 Usage:
-  npx opencode-cliproxy-provider [options]
-  bunx opencode-cliproxy-provider [options]
+  npx cliproxy-provider setup [target] [--dry-run] [--write] [--json]
+  npx cliproxy-provider sync [target] [--write] [--json]
+  npx cliproxy-provider doctor [target] [--json]
+  npx cliproxy-provider print-config [target] [--json]
+  npx cliproxy-provider serve [options]
+  npx cliproxy-provider models [options]
+
+Targets:
+  ${supportedTargets().join(", ")}
+
+Legacy alias:
+  npx opencode-cliproxy-provider <command> [options]
 
 Options:
-  --baseURL, -u <url>      Cliproxy server URL (e.g. http://127.0.0.1:8317/v1)
-  --apiKey, -k <key>       API key (stored in ~/.config/opencode/cliproxy/auth.json)
-  --npm <package>          Provider npm package (default: @ai-sdk/openai-compatible)
-  -h, --help               Show this help
-
-Without flags, runs interactively.
+  --baseURL, -u <url>       Cliproxy server URL (default: ${defaultBaseUrl})
+  --upstream-base-url <url> Upstream Cliproxy URL for serve/models
+  --apiKey, -k <key>        Legacy fallback API key for router/models commands
+  --host <host>             Router host for serve (default: [IP])
+  --port, -p <port>         Router port for serve (default: random free port)
+  --config <path>           Override setup/print config path where supported
+  --catalog                 Print catalog shape from models command
+  --json                    Print command result as JSON
+  --write                   Mutate files; setup/sync dry-run by default
+  -h, --help                Show this help
 `);
+}
+
+async function runModels(args: CliArgs): Promise<void> {
+  const baseUrl = args.upstreamBaseUrl ?? args.baseUrl ?? defaultBaseUrl;
+  const models = await fetchModels(baseUrl, args.apiKey ?? readStoredAuth()?.apiKey);
+  console.log(JSON.stringify(args.catalog ? modelsCatalogPayload(models) : { data: models }, null, 2));
+}
+
+function runServe(args: CliArgs): void {
+  const upstreamBaseURL = args.upstreamBaseUrl ?? args.baseUrl ?? defaultBaseUrl;
+  const server = serveCliproxyRouter({
+    upstreamBaseURL,
+    apiKey: args.apiKey ?? readStoredAuth()?.apiKey,
+    hostname: args.host,
+    port: args.port,
+  });
+  console.log(JSON.stringify({ ok: true, url: `http://${server.hostname}:${server.port}`, upstreamBaseURL }));
+}
+
+function homeDir(): string {
+  return process.env.HOME ?? process.env.USERPROFILE ?? "";
+}
+
+function ensureTarget(args: CliArgs): Target {
+  if (args.target) {
+    return args.target;
+  }
+  console.error(`Unknown target: ${args.rawTarget ?? ""}. Supported targets: ${supportedTargets().join(", ")}`);
+  process.exit(1);
+}
+
+function printCommandResult(result: Awaited<ReturnType<typeof runSetup>>, json: boolean): void {
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(result.status);
+  for (const warning of result.warnings) {
+    console.error(warning);
+  }
 }
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-
-  if (args.help) {
+  if (args.help || args.command === "help") {
     printHelp();
     return;
   }
-
-  const configPath = opencodeJsonPath();
-  const existing = readOpencodeConfig(configPath);
-  const existingProvider = isRecord(existing.provider) && isRecord(existing.provider.cliproxy);
-  const existingBaseURL =
-    existingProvider &&
-    isRecord((existing.provider as Record<string, unknown>).cliproxy) &&
-    isRecord(((existing.provider as Record<string, Record<string, unknown>>).cliproxy).options)
-      ? ((existing.provider as Record<string, Record<string, Record<string, unknown>>>).cliproxy.options).baseURL as string
-      : undefined;
-
-  let baseURL = args.baseURL;
-  let apiKey = args.apiKey;
-
-  // Interactive mode if missing required args
-  if (!baseURL || !apiKey) {
-    const rl = readline.createInterface({ input, output });
-    try {
-      if (!baseURL) {
-        baseURL = await prompt(
-          rl,
-          "Cliproxy server URL",
-          baseURL || existingBaseURL || "http://127.0.0.1:8317/v1",
-        );
-      }
-      if (!apiKey) {
-        apiKey = await promptHidden(rl, "API key");
-      }
-    } finally {
-      rl.close();
-    }
+  if (args.command === "models") {
+    await runModels(args);
+    return;
   }
-
-  if (!baseURL) {
-    console.error("Error: baseURL is required.");
-    process.exit(1);
+  if (args.command === "serve") {
+    runServe(args);
+    return;
   }
-
-  // Apply
-  const updated = applySetup(existing, {
-    baseURL,
-    apiKey: apiKey || "",
-    providerNpm: args.npm,
-  });
-
-  writeOpencodeConfig(configPath, updated);
-
-  if (apiKey) {
-    writeStoredAuth(apiKey);
-    console.log(`✓ API key saved to ${authFilePath()}`);
+  const home = homeDir();
+  const target = ensureTarget(args);
+  switch (args.command) {
+    case "setup":
+      printCommandResult(await runSetup(target, { baseUrl: args.baseUrl, write: args.write, config: args.config, home }), args.json);
+      return;
+    case "sync":
+      printCommandResult(await runSync(target, { home, write: args.write }), args.json);
+      return;
+    case "doctor":
+      printCommandResult(await runDoctor(target, { home }), args.json);
+      return;
+    case "print-config":
+      printCommandResult(await runPrintConfig(target, { home }), args.json);
+      return;
+    default:
+      assertNever(args.command);
   }
-
-  console.log(`✓ Plugin registered in ${configPath}`);
-  console.log(`✓ Provider cliproxy → ${baseURL}`);
-  console.log("\nDone. Restart opencode to activate.");
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? err.message : String(err));
+function assertNever(value: never): never {
+  throw new Error(`Unexpected command: ${String(value)}`);
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });
