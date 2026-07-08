@@ -58,13 +58,13 @@
   ],
   "author": "ilseoblee <islee23520@gmail.com>",
   "license": "MIT",
-  "homepage": "https://github.com/islee23520/cliproxy-provider#readme",
+  "homepage": "https://github.com/islee23520/opencode-cliproxy-provider#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/islee23520/cliproxy-provider.git"
+    "url": "git+https://github.com/islee23520/opencode-cliproxy-provider.git"
   },
   "bugs": {
-    "url": "https://github.com/islee23520/cliproxy-provider/issues"
+    "url": "https://github.com/islee23520/opencode-cliproxy-provider/issues"
   },
   "engines": {
     "bun": ">=1.0.0"
